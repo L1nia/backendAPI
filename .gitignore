@@ -1,0 +1,4 @@
+.secrets
+.db.secrets
+*.env.local
+.env
