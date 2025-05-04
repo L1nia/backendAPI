@@ -111,6 +111,7 @@ func main() {
 	// Маршруты пользователей/текущего пользователя
 	router.Handle("/users", jwtMiddleware(http.HandlerFunc(getUsersHandler))).Methods("GET", "OPTIONS")
 	router.Handle("/current-user", jwtMiddleware(http.HandlerFunc(getCurrentUserHandler))).Methods("GET", "OPTIONS")
+	router.Handle("/profile", jwtMiddleware(http.HandlerFunc(getProfileHandler))).Methods("GET", "OPTIONS")
 
 	// Маршруты получения/хранения опросника
 	router.Handle("/save-responses", jwtMiddleware(http.HandlerFunc(saveResponsesHandler))).Methods("POST", "OPTIONS")
@@ -273,6 +274,53 @@ func initDB() {
 	);`
 
 	_, err = db.Exec(createSurveyPointsTableSQL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Таблица для хранения интересов пользователей
+	createUserInterestsTableSQL := `
+	CREATE TABLE IF NOT EXISTS user_interests (
+		user_id INTEGER REFERENCES users(id),
+		interest TEXT NOT NULL,
+		PRIMARY KEY (user_id, interest)
+	);
+	`
+	_, err = db.Exec(createUserInterestsTableSQL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Таблица для хранения статистики пользователей
+	createUserStatsTableSQL := `
+	CREATE TABLE IF NOT EXISTS user_stats (
+		user_id INTEGER REFERENCES users(id),
+		polls INTEGER DEFAULT 0,
+		hackathons INTEGER DEFAULT 0,
+		attendance FLOAT DEFAULT 0,
+		conferences INTEGER DEFAULT 0,
+		bet INTEGER DEFAULT 0,
+	);
+	`
+
+	_, err = db.Exec(createUserStatsTableSQL)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Таблица для хранения недельной активности пользователей
+	createWeeklyActivityTableSQL := `
+	CREATE TABLE IF NOT EXISTS weekly_activity (
+		user_id INTEGER REFERENCES users(id),
+		day TEXT NOT NULL,
+		attendance INTEGER DEFAULT 0,
+		hackathons INTEGER DEFAULT 0,
+		polls INTEGER DEFAULT 0,
+		PRIMARY KEY (user_id, day)
+	);
+	`
+
+	_, err = db.Exec(createWeeklyActivityTableSQL)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -539,6 +587,107 @@ func getCurrentUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(user)
+}
+
+// Профиль пользователя
+func getProfileHandler(w http.ResponseWriter, r *http.Request) {
+	claims, ok := r.Context().Value("claims").(*Claims)
+	if !ok {
+		http.Error(w, "Invalid token", http.StatusUnauthorized)
+		return
+	}
+
+	var user User
+	err := db.QueryRow(`
+        SELECT id, username, email, age, phone, points, created_at 
+        FROM users 
+        WHERE id = $1
+    `, claims.UserID).Scan(
+		&user.ID, &user.Username, &user.Email,
+		&user.Age, &user.Phone, &user.Points, &user.CreatedAt,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	rows, err := db.Query("SELECT interest FROM user_interests WHERE user_id = $1", claims.UserID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var interests []string
+	for rows.Next() {
+		var interest string
+		if err := rows.Scan(&interest); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		interests = append(interests, interest)
+	}
+
+	var stats struct {
+		Polls       int     `json:"polls"`
+		Hackathons  int     `json:"hackathons"`
+		Attendance  float64 `json:"attendance"`
+		Conferences int     `json:"conferences"`
+		Bet         int     `json:"bet"`
+	}
+	err = db.QueryRow(`
+        SELECT polls, hackathons, attendance, conferences, bet 
+        FROM user_stats 
+        WHERE user_id = $1
+    `, claims.UserID).Scan(
+		&stats.Polls, &stats.Hackathons, &stats.Attendance,
+		&stats.Conferences, &stats.Bet,
+	)
+	if err != nil && err != sql.ErrNoRows {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	rows, err = db.Query(`
+        SELECT day, attendance, hackathons, polls 
+        FROM weekly_activity 
+        WHERE user_id = $1
+    `, claims.UserID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var weeklyActivity []map[string]interface{}
+	for rows.Next() {
+		var day string
+		var attendance, hackathons, polls int
+		if err := rows.Scan(&day, &attendance, &hackathons, &polls); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		weeklyActivity = append(weeklyActivity, map[string]interface{}{
+			"day":        day,
+			"attendance": attendance,
+			"hackathons": hackathons,
+			"polls":      polls,
+		})
+	}
+
+	response := map[string]interface{}{
+		"age":             user.Age,
+		"email":           user.Email,
+		"status":          "Active",
+		"interests":       interests,
+		"stats":           stats,
+		"weekly_activity": weeklyActivity,
+		"avatar_url":      "https://example.com/avatar.png",
+		"name":            user.Username,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // Блок: Обработчик опросника
