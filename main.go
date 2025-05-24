@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -41,9 +39,8 @@ type User struct {
 
 // AuthResponse структура для ответа при авторизации
 type AuthResponse struct {
-	Token        string `json:"token"`
-	SessionToken string `json:"session_token"`
-	User         User   `json:"user"`
+	Token string `json:"token"`
+	User  User   `json:"user"`
 }
 
 // Claims структура для JWT
@@ -153,14 +150,6 @@ func initJWTKey() {
 		fmt.Println("Using JWT key from environment variable")
 		return
 	}
-}
-
-func generateRandomSessionToken() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return ""
-	}
-	return base64.URLEncoding.EncodeToString(b)
 }
 
 // Инициализация PostgreSQL
@@ -299,7 +288,7 @@ func initDB() {
 		hackathons INTEGER DEFAULT 0,
 		attendance FLOAT DEFAULT 0,
 		conferences INTEGER DEFAULT 0,
-		bet INTEGER DEFAULT 0,
+		bet INTEGER DEFAULT 0
 	);
 	`
 
@@ -451,14 +440,10 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	// Убираем пароль из ответа
 	user.Password = ""
 
-	// Генерация сессионного токена
-	sessionToken := generateRandomSessionToken()
-
 	// Формирование ответа
 	response := AuthResponse{
-		Token:        tokenString,
-		SessionToken: sessionToken,
-		User:         user,
+		Token: tokenString,
+		User:  user,
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
